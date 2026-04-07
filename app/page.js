@@ -84,7 +84,7 @@ async function callClaude(system, userContent) {
           'anthropic-dangerous-direct-browser-access': 'true',
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-haiku-4-5-20251001',
           max_tokens: 500,
           system,
           messages: [{ role: 'user', content: userContent }],
@@ -306,7 +306,7 @@ export default function Home() {
     // Claude only analyzes a short text list (~400 tokens per stock)
     await Promise.all(stockList.map(async (stock, i) => {
       // Small stagger to avoid hammering simultaneously
-      await new Promise(r => setTimeout(r, i * 8000));
+      await new Promise(r => setTimeout(r, i * 2000));
       try {
         const data = await scanStock(stock);
         setResults(r => ({...r, [stock.ticker]: data}));
