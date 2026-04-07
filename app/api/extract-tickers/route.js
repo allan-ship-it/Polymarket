@@ -1,4 +1,5 @@
 export const maxDuration = 60;
+export const config = { api: { bodyParser: { sizeLimit: "10mb" } } };
 
 import Anthropic from '@anthropic-ai/sdk';
 
