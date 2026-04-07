@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "app/api/scan-stock/route.js": {
+      "maxDuration": 60
+    },
+    "app/api/extract-tickers/route.js": {
+      "maxDuration": 60
+    }
+  }
+}

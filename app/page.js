@@ -191,38 +191,32 @@ export default function Home() {
 
       setStocks(extractedStocks);
 
-      // Step 2: Scan stocks in batches of 2 with delay to avoid rate limits
+      // Step 2: Scan stocks one at a time with 5s delay — avoids rate limits
       setPhase('scanning');
       const initStatuses = {};
       extractedStocks.forEach((s) => { initStatuses[s.ticker] = 'loading'; });
       setStatuses(initStatuses);
 
-      const BATCH_SIZE = 2;
-      const BATCH_DELAY = 3000;
-
-      for (let i = 0; i < extractedStocks.length; i += BATCH_SIZE) {
-        const batch = extractedStocks.slice(i, i + BATCH_SIZE);
-        await Promise.all(
-          batch.map(async (stock) => {
-            try {
-              const res = await fetch('/api/scan-stock', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ stock }),
-              });
-              const data = await res.json();
-              if (data.error) throw new Error(data.error);
-              setResults((r) => ({ ...r, [stock.ticker]: data }));
-              setStatuses((s) => ({ ...s, [stock.ticker]: 'done' }));
-            } catch {
-              setStatuses((s) => ({ ...s, [stock.ticker]: 'error' }));
-            } finally {
-              setCompleted((c) => c + 1);
-            }
-          })
-        );
-        if (i + BATCH_SIZE < extractedStocks.length) {
-          await new Promise((r) => setTimeout(r, BATCH_DELAY));
+      for (let i = 0; i < extractedStocks.length; i++) {
+        const stock = extractedStocks[i];
+        try {
+          const res = await fetch('/api/scan-stock', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stock }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          setResults((r) => ({ ...r, [stock.ticker]: data }));
+          setStatuses((s) => ({ ...s, [stock.ticker]: 'done' }));
+        } catch {
+          setStatuses((s) => ({ ...s, [stock.ticker]: 'error' }));
+        } finally {
+          setCompleted((c) => c + 1);
+        }
+        // 5s gap between each stock to stay within rate limits
+        if (i < extractedStocks.length - 1) {
+          await new Promise((r) => setTimeout(r, 5000));
         }
       }
 
