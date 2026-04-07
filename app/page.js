@@ -6,68 +6,51 @@ import { useState, useRef, useCallback } from 'react';
 const API_KEY = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY;
 
 // ─── Keyword map: ticker/sector → Polymarket search terms ────────────────────
-const TICKER_KEYWORDS = {
-  // EU Banks — use terms that match ECB market titles
-  'UCG.MI': ['ECB', 'eurozone recession'],
-  'SAN.MC': ['ECB', 'eurozone recession'],
-  'DBK.DE': ['ECB', 'eurozone recession'],
-  'BBVA.MC': ['ECB', 'eurozone recession'],
-  'ETE.AT':  ['ECB', 'eurozone recession'],
-  'SAB.MC':  ['ECB', 'eurozone recession'],
-  'TPEIR.AT':['ECB', 'eurozone recession'],
-  'CABK.MC': ['ECB', 'eurozone recession'],
-  // UK
-  'EZJ.L':   ['oil', 'recession'],
-  'FRES.L':  ['gold', 'silver'],
-  // US miners
+const TICKER_THEMES = {
+  'UCG.MI':   ['rates', 'recession'],
+  'SAN.MC':   ['rates', 'recession'],
+  'DBK.DE':   ['rates', 'recession'],
+  'BBVA.MC':  ['rates', 'recession'],
+  'ETE.AT':   ['rates', 'recession'],
+  'SAB.MC':   ['rates', 'recession'],
+  'TPEIR.AT': ['rates', 'recession'],
+  'CABK.MC':  ['rates', 'recession'],
+  'EZJ.L':    ['oil', 'recession'],
+  'FRES.L':   ['gold', 'silver'],
   'AG':   ['silver', 'gold'],
   'HL':   ['silver', 'gold'],
   'BTG':  ['gold', 'recession'],
   'CDE':  ['silver', 'gold'],
-  // US stocks
   'AAL':  ['oil', 'recession'],
-  'HOOD': ['Fed', 'Bitcoin'],
-  'U':    ['recession', 'tariff'],
-  'BAC':  ['Fed', 'recession'],
-  'MSFT': ['tariff', 'recession'],
-  'ONDS': ['defense', 'drone'],
+  'HOOD': ['crypto', 'rates'],
+  'U':    ['tariffs', 'recession'],
+  'BAC':  ['rates', 'recession'],
+  'MSFT': ['tariffs', 'recession'],
+  'ONDS': ['geopolitics', 'tariffs'],
 };
 
-const SECTOR_KEYWORDS = {
-  'Banks':              ['Fed', 'recession'],
+const SECTOR_THEMES = {
+  'Banks':              ['rates', 'recession'],
   'Metals & Mining':    ['gold', 'silver'],
   'Passenger Airlines': ['oil', 'recession'],
-  'Software':           ['recession', 'tariff'],
-  'Capital Markets':    ['Fed', 'Bitcoin'],
-  'Communications':     ['defense', 'tariff'],
+  'Software':           ['tariffs', 'recession'],
+  'Capital Markets':    ['crypto', 'rates'],
+  'Communications':     ['geopolitics', 'tariffs'],
 };
 
-function getKeywords(stock) {
-  if (TICKER_KEYWORDS[stock.ticker]) return TICKER_KEYWORDS[stock.ticker];
-  for (const [key, kws] of Object.entries(SECTOR_KEYWORDS)) {
-    if ((stock.sector || '').includes(key)) return kws;
+function getThemes(stock) {
+  if (TICKER_THEMES[stock.ticker]) return TICKER_THEMES[stock.ticker];
+  for (const [key, themes] of Object.entries(SECTOR_THEMES)) {
+    if ((stock.sector || '').includes(key)) return themes;
   }
-  const isEU = ['IT','UK','ES','DE','GR','EU'].includes(stock.country);
-  return isEU ? ['ECB rate', 'eurozone recession'] : ['Fed rate', 'US recession'];
+  return ['rates', 'recession'];
 }
 
-// ─── Fetch markets from Polymarket via proxy ─────────────────────────────────
-async function fetchMarkets(keywords) {
-  const results = await Promise.all(
-    keywords.map(async (kw) => {
-      const resp = await fetch(`/api/polymarket?q=${encodeURIComponent(kw)}`);
-      if (!resp.ok) return [];
-      const data = await resp.json();
-      return Array.isArray(data) ? data : [];
-    })
-  );
-
-  // Deduplicate by title, sort by volume
-  const seen = new Set();
-  return results.flat()
-    .filter(m => { if (seen.has(m.title)) return false; seen.add(m.title); return true; })
-    .sort((a, b) => b.volume_usd - a.volume_usd)
-    .slice(0, 10);
+async function fetchMarkets(themes) {
+  const resp = await fetch(`/api/polymarket?themes=${encodeURIComponent(themes.join(','))}`);
+  if (!resp.ok) return [];
+  const data = await resp.json();
+  return Array.isArray(data) ? data : [];
 }
 
 // ─── Claude call — NO web_search, just analyzes the market list ──────────────
@@ -112,13 +95,22 @@ async function callClaude(system, userContent) {
 }
 
 // ─── Scan a single stock ──────────────────────────────────────────────────────
-const ANALYSIS_PROMPT = `You are an equity analyst. Given a stock and a list of active Polymarket prediction markets, pick the 3 most relevant markets and explain their impact on this stock.
+const ANALYSIS_PROMPT = `You are an equity analyst. Given a stock and a list of active Polymarket prediction markets covering macro themes (interest rates, recession, crypto, oil, gold, silver, tariffs, geopolitics), pick the 3 most relevant and explain their impact.
+
+Key relationships:
+- EU & US banks: rate decisions (YES=cut=bearish NIM, NO=hold=bullish NIM), recession odds (YES=bearish loans)
+- Gold/silver miners: gold/silver price direction (higher=bullish miner), recession (YES=safe haven bid=bullish gold)
+- Airlines: oil price (higher=bearish costs), recession (YES=bearish demand)
+- Fintech/crypto (HOOD): Bitcoin direction drives trading volumes
+- Software/tech: tariffs (YES=higher input costs=bearish), recession (YES=lower enterprise spend)
+
+Always pick exactly 3. Use the exact market title from the list.
 Return ONLY valid JSON, no markdown:
 {"headline":"one sentence verdict","bias":"bullish|bearish|mixed","markets":[{"title":"exact market title from list","yes_pct":58,"volume_usd":1200000,"impact":"bullish|bearish|neutral","why":"one sentence how YES affects this stock"}]}`;
 
 async function scanStock(stock) {
-  const keywords = getKeywords(stock);
-  const markets = await fetchMarkets(keywords);
+  const themes = getThemes(stock);
+  const markets = await fetchMarkets(themes);
 
   if (!markets.length) throw new Error('No Polymarket data found');
 
