@@ -7,38 +7,38 @@ const API_KEY = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY;
 
 // ─── Keyword map: ticker/sector → Polymarket search terms ────────────────────
 const TICKER_KEYWORDS = {
-  // EU Banks
-  'UCG.MI': ['ECB rate', 'eurozone recession'],
-  'SAN.MC': ['ECB rate', 'eurozone recession'],
-  'DBK.DE': ['ECB rate', 'Germany recession'],
-  'BBVA.MC': ['ECB rate', 'eurozone recession'],
-  'ETE.AT':  ['ECB rate', 'Greece'],
-  'SAB.MC':  ['ECB rate', 'eurozone recession'],
-  'TPEIR.AT':['ECB rate', 'Greece'],
-  'CABK.MC': ['ECB rate', 'eurozone recession'],
+  // EU Banks — use terms that match ECB market titles
+  'UCG.MI': ['ECB', 'eurozone recession'],
+  'SAN.MC': ['ECB', 'eurozone recession'],
+  'DBK.DE': ['ECB', 'eurozone recession'],
+  'BBVA.MC': ['ECB', 'eurozone recession'],
+  'ETE.AT':  ['ECB', 'eurozone recession'],
+  'SAB.MC':  ['ECB', 'eurozone recession'],
+  'TPEIR.AT':['ECB', 'eurozone recession'],
+  'CABK.MC': ['ECB', 'eurozone recession'],
   // UK
-  'EZJ.L':   ['oil price', 'recession'],
-  'FRES.L':  ['gold price', 'silver'],
+  'EZJ.L':   ['oil', 'recession'],
+  'FRES.L':  ['gold', 'silver'],
   // US miners
-  'AG':   ['silver', 'gold price'],
-  'HL':   ['silver', 'gold price'],
-  'BTG':  ['gold price', 'recession'],
-  'CDE':  ['silver', 'gold price'],
+  'AG':   ['silver', 'gold'],
+  'HL':   ['silver', 'gold'],
+  'BTG':  ['gold', 'recession'],
+  'CDE':  ['silver', 'gold'],
   // US stocks
-  'AAL':  ['oil price', 'recession'],
-  'HOOD': ['Fed rate', 'Bitcoin'],
+  'AAL':  ['oil', 'recession'],
+  'HOOD': ['Fed', 'Bitcoin'],
   'U':    ['recession', 'tariff'],
-  'BAC':  ['Fed rate', 'US recession'],
+  'BAC':  ['Fed', 'recession'],
   'MSFT': ['tariff', 'recession'],
   'ONDS': ['defense', 'drone'],
 };
 
 const SECTOR_KEYWORDS = {
-  'Banks':              ['Fed rate', 'recession'],
-  'Metals & Mining':    ['gold price', 'silver'],
-  'Passenger Airlines': ['oil price', 'recession'],
+  'Banks':              ['Fed', 'recession'],
+  'Metals & Mining':    ['gold', 'silver'],
+  'Passenger Airlines': ['oil', 'recession'],
   'Software':           ['recession', 'tariff'],
-  'Capital Markets':    ['Fed rate', 'Bitcoin'],
+  'Capital Markets':    ['Fed', 'Bitcoin'],
   'Communications':     ['defense', 'tariff'],
 };
 
