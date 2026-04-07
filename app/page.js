@@ -306,7 +306,7 @@ export default function Home() {
     // Claude only analyzes a short text list (~400 tokens per stock)
     await Promise.all(stockList.map(async (stock, i) => {
       // Small stagger to avoid hammering simultaneously
-      await new Promise(r => setTimeout(r, i * 800));
+      await new Promise(r => setTimeout(r, i * 8000));
       try {
         const data = await scanStock(stock);
         setResults(r => ({...r, [stock.ticker]: data}));
