@@ -42,13 +42,9 @@ const fmtVol = (v) =>
   !v ? '—' : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1000 ? `$${Math.round(v / 1000)}K` : `$${v}`;
 
 // ─── Anthropic API call (client-side) ────────────────────────────────────────
-async function callClaude({ system, userContent, tools = [] }) {
+async function callClaudeOnce({ system, userContent, tools = [] }) {
   const messages = [{ role: 'user', content: userContent }];
-  const body = {
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: 1000,
-    messages,
-  };
+  const body = { model: 'claude-sonnet-4-20250514', max_tokens: 600, messages };
   if (system) body.system = system;
   if (tools.length) body.tools = tools;
 
@@ -74,12 +70,29 @@ async function callClaude({ system, userContent, tools = [] }) {
       const errBody = await resp.json();
       errMsg = errBody?.error?.message || errBody?.message || errMsg;
     } catch {}
-    throw new Error(errMsg);
+    const err = new Error(errMsg);
+    err.status = resp.status;
+    throw err;
   }
 
   const data = await resp.json();
-  const text = data.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
-  return text;
+  return data.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+}
+
+async function callClaude(params, retries = 3) {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await callClaudeOnce(params);
+    } catch (err) {
+      const isRateLimit = err.status === 429 || (err.message || '').includes('rate limit');
+      if (isRateLimit && attempt < retries - 1) {
+        const wait = (attempt + 1) * 30000; // 30s, 60s, 90s
+        await new Promise((r) => setTimeout(r, wait));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ─── Extract tickers from text or image ─────────────────────────────────────
@@ -124,25 +137,9 @@ function inferCountry(ticker, market) {
 }
 
 // ─── Scan single stock against Polymarket ───────────────────────────────────
-const SCAN_PROMPT = `You are a sell-side equity analyst specialising in prediction market intelligence.
-Today's date is April 2026. Find 3 Polymarket prediction markets that are CURRENTLY ACTIVE and NOT YET RESOLVED — meaning they are still open for trading right now in April 2026 or later. Do NOT include any markets that have already resolved or expired before April 2026.
-
-Drivers by type:
-- European banks (UCG, SAN, DBK, BBVA, ETE, SAB, TPEIR, CABK): ECB rate decisions 2026, eurozone recession 2026, country political risk, credit spreads
-- UK airline (EZJ): oil price 2026, recession 2026, travel demand, GBP/EUR
-- Silver miners (AG, HL, CDE, FRES): silver/gold price 2026, USD, tariffs on metals, recession
-- Gold miners (BTG): gold price 2026, USD, geopolitical risk
-- US airlines (AAL): oil 2026, US recession 2026, travel demand, tariffs
-- Fintech (HOOD): Fed rate path 2026, BTC/crypto 2026, retail volumes, recession
-- Software/AI (U, MSFT): AI capex 2026, Big Tech spending, tariffs, recession
-- US banks (BAC): Fed rate decisions 2026, US recession 2026, credit spreads
-- Defense tech (ONDS): US defense spending 2026, drone regulation
-
-CRITICAL: Only include markets with a resolution date of April 2026 or later. Skip any market that resolved in 2025 or earlier. If a market title mentions a date or person in a context that has already passed, skip it.
-
-Return ONLY valid JSON, no markdown, no fences:
-{"headline":"one sharp sentence verdict","bias":"bullish|bearish|mixed","markets":[{"title":"market title","yes_pct":58,"volume_usd":1200000,"impact":"bullish|bearish|neutral","why":"one sentence how YES affects this stock"}]}
-Exactly 3 markets. yes_pct=integer 0-100. volume_usd=integer.`;
+const SCAN_PROMPT = `Equity analyst. Today: April 2026. Find 3 ACTIVE (unresolved, open after April 2026) Polymarket markets for this stock's price drivers. Skip resolved/expired markets.
+Return ONLY JSON: {"headline":"verdict","bias":"bullish|bearish|mixed","markets":[{"title":"...","yes_pct":58,"volume_usd":1200000,"impact":"bullish|bearish|neutral","why":"..."}]}
+3 markets only. yes_pct=integer. volume_usd=integer.`;
 
 async function scanStock(stock) {
   const text = await callClaude({
@@ -303,7 +300,7 @@ export default function Home() {
         setCompleted((c) => c + 1);
       }
       if (i < stockList.length - 1) {
-        await new Promise((r) => setTimeout(r, 4000));
+        await new Promise((r) => setTimeout(r, 8000));
       }
     }
     setPhase('done');
