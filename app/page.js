@@ -125,18 +125,20 @@ function inferCountry(ticker, market) {
 
 // ─── Scan single stock against Polymarket ───────────────────────────────────
 const SCAN_PROMPT = `You are a sell-side equity analyst specialising in prediction market intelligence.
-Find 3 currently active Polymarket prediction markets most relevant to this stock's key price drivers.
+Today's date is April 2026. Find 3 Polymarket prediction markets that are CURRENTLY ACTIVE and NOT YET RESOLVED — meaning they are still open for trading right now in April 2026 or later. Do NOT include any markets that have already resolved or expired before April 2026.
 
 Drivers by type:
-- European banks (UCG, SAN, DBK, BBVA, ETE, SAB, TPEIR, CABK): ECB rate decisions, eurozone recession, country political risk, credit spreads
-- UK airline (EZJ): oil price, recession, travel demand, GBP/EUR
-- Silver miners (AG, HL, CDE, FRES): silver/gold price, USD, tariffs on metals, recession
-- Gold miners (BTG): gold price, USD, geopolitical risk
-- US airlines (AAL): oil, US recession, travel demand, tariffs
-- Fintech (HOOD): Fed rate path, BTC/crypto, retail volumes, recession
-- Software/AI (U, MSFT): AI capex, Big Tech spending, tariffs, recession
-- US banks (BAC): Fed rate path, US recession, Powell, credit spreads
-- Defense tech (ONDS): US defense spending, drone regulation
+- European banks (UCG, SAN, DBK, BBVA, ETE, SAB, TPEIR, CABK): ECB rate decisions 2026, eurozone recession 2026, country political risk, credit spreads
+- UK airline (EZJ): oil price 2026, recession 2026, travel demand, GBP/EUR
+- Silver miners (AG, HL, CDE, FRES): silver/gold price 2026, USD, tariffs on metals, recession
+- Gold miners (BTG): gold price 2026, USD, geopolitical risk
+- US airlines (AAL): oil 2026, US recession 2026, travel demand, tariffs
+- Fintech (HOOD): Fed rate path 2026, BTC/crypto 2026, retail volumes, recession
+- Software/AI (U, MSFT): AI capex 2026, Big Tech spending, tariffs, recession
+- US banks (BAC): Fed rate decisions 2026, US recession 2026, credit spreads
+- Defense tech (ONDS): US defense spending 2026, drone regulation
+
+CRITICAL: Only include markets with a resolution date of April 2026 or later. Skip any market that resolved in 2025 or earlier. If a market title mentions a date or person in a context that has already passed, skip it.
 
 Return ONLY valid JSON, no markdown, no fences:
 {"headline":"one sharp sentence verdict","bias":"bullish|bearish|mixed","markets":[{"title":"market title","yes_pct":58,"volume_usd":1200000,"impact":"bullish|bearish|neutral","why":"one sentence how YES affects this stock"}]}
