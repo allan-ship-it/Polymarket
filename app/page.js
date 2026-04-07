@@ -2,8 +2,10 @@
 
 import { useState, useRef, useCallback } from 'react';
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Config ─────────────────────────────────────────────────────────────────
+const API_KEY = process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY;
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
 const FLAG = {
   IT: '🇮🇹', UK: '🇬🇧', ES: '🇪🇸', DE: '🇩🇪', GR: '🇬🇷',
   US: '🇺🇸', CA: '🇨🇦', EU: '🇪🇺',
@@ -39,9 +41,121 @@ const BAR_CLR = (p) =>
 const fmtVol = (v) =>
   !v ? '—' : v >= 1e6 ? `$${(v / 1e6).toFixed(1)}M` : v >= 1000 ? `$${Math.round(v / 1000)}K` : `$${v}`;
 
-// ─── Stock Card ──────────────────────────────────────────────────────────────
+// ─── Anthropic API call (client-side) ────────────────────────────────────────
+async function callClaude({ system, userContent, tools = [] }) {
+  const messages = [{ role: 'user', content: userContent }];
+  const body = {
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: 1000,
+    messages,
+  };
+  if (system) body.system = system;
+  if (tools.length) body.tools = tools;
 
-function StockCard({ stock, result, status }) {
+  let resp;
+  try {
+    resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (networkErr) {
+    throw new Error(`Network error: ${networkErr.message}`);
+  }
+
+  if (!resp.ok) {
+    let errMsg = `HTTP ${resp.status}`;
+    try {
+      const errBody = await resp.json();
+      errMsg = errBody?.error?.message || errBody?.message || errMsg;
+    } catch {}
+    throw new Error(errMsg);
+  }
+
+  const data = await resp.json();
+  const text = data.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  return text;
+}
+
+// ─── Extract tickers from text or image ─────────────────────────────────────
+async function extractStocks({ tickers, image, mimeType, market }) {
+  if (tickers && tickers.trim()) {
+    const list = tickers.split(/[,\n\s;]+/).map((t) => t.trim().toUpperCase()).filter(Boolean);
+    return list.map((ticker) => ({
+      ticker,
+      name: ticker,
+      sector: 'Unknown',
+      country: inferCountry(ticker, market),
+    }));
+  }
+
+  const text = await callClaude({
+    userContent: [
+      { type: 'image', source: { type: 'base64', media_type: mimeType || 'image/png', data: image } },
+      {
+        type: 'text',
+        text: `Extract all stock information from this Danelfin screenshot table.
+Return ONLY a valid JSON array — no markdown, no code fences, no preamble.
+Format: [{"ticker":"UCG.MI","name":"UniCredit SpA","sector":"Banks","country":"IT"}]
+Country from suffix: .MI=IT, .L=UK, .MC=ES, .DE=DE, .AT=GR, no suffix=US, Canadian=CA.
+Extract all visible rows.`,
+      },
+    ],
+  });
+
+  const match = text.match(/\[[\s\S]*\]/);
+  if (!match) throw new Error('Could not parse stocks from image');
+  return JSON.parse(match[0]);
+}
+
+function inferCountry(ticker, market) {
+  if (ticker.endsWith('.MI')) return 'IT';
+  if (ticker.endsWith('.L')) return 'UK';
+  if (ticker.endsWith('.MC')) return 'ES';
+  if (ticker.endsWith('.DE')) return 'DE';
+  if (ticker.endsWith('.AT')) return 'GR';
+  if (ticker.endsWith('.TO')) return 'CA';
+  return market === 'EU' ? 'EU' : 'US';
+}
+
+// ─── Scan single stock against Polymarket ───────────────────────────────────
+const SCAN_PROMPT = `You are a sell-side equity analyst specialising in prediction market intelligence.
+Find 3 currently active Polymarket prediction markets most relevant to this stock's key price drivers.
+
+Drivers by type:
+- European banks (UCG, SAN, DBK, BBVA, ETE, SAB, TPEIR, CABK): ECB rate decisions, eurozone recession, country political risk, credit spreads
+- UK airline (EZJ): oil price, recession, travel demand, GBP/EUR
+- Silver miners (AG, HL, CDE, FRES): silver/gold price, USD, tariffs on metals, recession
+- Gold miners (BTG): gold price, USD, geopolitical risk
+- US airlines (AAL): oil, US recession, travel demand, tariffs
+- Fintech (HOOD): Fed rate path, BTC/crypto, retail volumes, recession
+- Software/AI (U, MSFT): AI capex, Big Tech spending, tariffs, recession
+- US banks (BAC): Fed rate path, US recession, Powell, credit spreads
+- Defense tech (ONDS): US defense spending, drone regulation
+
+Return ONLY valid JSON, no markdown, no fences:
+{"headline":"one sharp sentence verdict","bias":"bullish|bearish|mixed","markets":[{"title":"market title","yes_pct":58,"volume_usd":1200000,"impact":"bullish|bearish|neutral","why":"one sentence how YES affects this stock"}]}
+Exactly 3 markets. yes_pct=integer 0-100. volume_usd=integer.`;
+
+async function scanStock(stock) {
+  const text = await callClaude({
+    system: SCAN_PROMPT,
+    userContent: `Stock: ${stock.ticker} — ${stock.name} (${stock.sector}, ${stock.country}). Find 3 active Polymarket markets most relevant to this stock's price drivers. Return YES% and volumes.`,
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+  });
+
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON in response');
+  return JSON.parse(match[0]);
+}
+
+// ─── Stock Card ──────────────────────────────────────────────────────────────
+function StockCard({ stock, result, status, errorMsg, onRetry }) {
   const [expanded, setExpanded] = useState(false);
   const ss = SECTOR_STYLE(stock.sector);
 
@@ -64,16 +178,22 @@ function StockCard({ stock, result, status }) {
           {status === 'loading' && (
             <div className="flex gap-1 items-center">
               {[0, 1, 2].map((i) => (
-                <span
-                  key={i}
-                  className="pulse-dot w-1 h-1 rounded-full bg-gray-300 inline-block"
-                  style={{ animationDelay: `${i * 0.2}s` }}
-                />
+                <span key={i} className="pulse-dot w-1 h-1 rounded-full bg-gray-300 inline-block"
+                  style={{ animationDelay: `${i * 0.2}s` }} />
               ))}
+              <span className="text-[10px] text-gray-400 ml-1">scanning...</span>
             </div>
           )}
           {status === 'error' && (
-            <p className="text-[11px] text-red-500">Failed to load — try refreshing</p>
+            <div>
+              <p className="text-[11px] text-red-500 mb-1">{errorMsg || 'Failed to load'}</p>
+              <button
+                onClick={(e) => { e.stopPropagation(); onRetry(stock); }}
+                className="text-[10px] text-blue-500 underline hover:text-blue-700"
+              >
+                retry
+              </button>
+            </div>
           )}
           {result && (
             <p className="text-xs text-gray-600 leading-relaxed">{result.headline}</p>
@@ -107,10 +227,8 @@ function StockCard({ stock, result, status }) {
                 <span className="font-mono text-[9px] text-gray-500">{fmtVol(m.volume_usd)}</span>
               </div>
               <div className="h-0.5 bg-gray-200 rounded-full overflow-hidden mb-2">
-                <div
-                  className={`h-full bar-fill rounded-full ${BAR_CLR(m.yes_pct)}`}
-                  style={{ width: `${Math.min(100, Math.max(0, Math.round(m.yes_pct)))}%` }}
-                />
+                <div className={`h-full bar-fill rounded-full ${BAR_CLR(m.yes_pct)}`}
+                  style={{ width: `${Math.min(100, Math.max(0, Math.round(m.yes_pct)))}%` }} />
               </div>
               <p className="text-[11px] text-gray-500 leading-relaxed">{m.why}</p>
             </div>
@@ -122,10 +240,9 @@ function StockCard({ stock, result, status }) {
 }
 
 // ─── Main Page ───────────────────────────────────────────────────────────────
-
 export default function Home() {
-  const [mode, setMode] = useState('text'); // 'text' | 'image'
-  const [market, setMarket] = useState('auto'); // 'auto' | 'US' | 'EU'
+  const [mode, setMode] = useState('text');
+  const [market, setMarket] = useState('auto');
   const [tickerInput, setTickerInput] = useState('');
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -133,7 +250,7 @@ export default function Home() {
   const [results, setResults] = useState({});
   const [statuses, setStatuses] = useState({});
   const [completed, setCompleted] = useState(0);
-  const [phase, setPhase] = useState('idle'); // 'idle' | 'extracting' | 'scanning' | 'done'
+  const [phase, setPhase] = useState('idle');
   const [error, setError] = useState(null);
   const fileRef = useRef();
 
@@ -160,7 +277,54 @@ export default function Home() {
       r.readAsDataURL(file);
     });
 
+  const [errors, setErrors] = useState({});
+
+  const runScan = useCallback(async (stockList) => {
+    setPhase('scanning');
+    const initStatuses = {};
+    stockList.forEach((s) => { initStatuses[s.ticker] = 'loading'; });
+    setStatuses(initStatuses);
+    setCompleted(0);
+    setErrors({});
+
+    // Scan sequentially with 4s gap to respect rate limits
+    for (let i = 0; i < stockList.length; i++) {
+      const stock = stockList[i];
+      try {
+        const data = await scanStock(stock);
+        setResults((r) => ({ ...r, [stock.ticker]: data }));
+        setStatuses((s) => ({ ...s, [stock.ticker]: 'done' }));
+      } catch (e) {
+        setStatuses((s) => ({ ...s, [stock.ticker]: 'error' }));
+        setErrors((er) => ({ ...er, [stock.ticker]: e.message }));
+      } finally {
+        setCompleted((c) => c + 1);
+      }
+      if (i < stockList.length - 1) {
+        await new Promise((r) => setTimeout(r, 4000));
+      }
+    }
+    setPhase('done');
+  }, []);
+
+  const handleRetry = useCallback(async (stock) => {
+    setStatuses((s) => ({ ...s, [stock.ticker]: 'loading' }));
+    setErrors((er) => { const n = {...er}; delete n[stock.ticker]; return n; });
+    try {
+      const data = await scanStock(stock);
+      setResults((r) => ({ ...r, [stock.ticker]: data }));
+      setStatuses((s) => ({ ...s, [stock.ticker]: 'done' }));
+    } catch (e) {
+      setStatuses((s) => ({ ...s, [stock.ticker]: 'error' }));
+      setErrors((er) => ({ ...er, [stock.ticker]: e.message }));
+    }
+  }, []);
+
   const handleScan = useCallback(async () => {
+    if (!API_KEY) {
+      setError('NEXT_PUBLIC_ANTHROPIC_API_KEY is not set. Add it to your Vercel environment variables.');
+      return;
+    }
     setError(null);
     setStocks([]);
     setResults({});
@@ -169,63 +333,27 @@ export default function Home() {
     setPhase('extracting');
 
     try {
-      // Step 1: Extract tickers
-      let body;
+      let image, mimeType;
       if (mode === 'image' && imageFile) {
-        const b64 = await toBase64(imageFile);
-        body = { image: b64, mimeType: imageFile.type, market };
-      } else {
-        body = { tickers: tickerInput, market };
+        image = await toBase64(imageFile);
+        mimeType = imageFile.type;
       }
 
-      const extractRes = await fetch('/api/extract-tickers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+      const extractedStocks = await extractStocks({
+        tickers: mode === 'text' ? tickerInput : null,
+        image,
+        mimeType,
+        market,
       });
-      const extractData = await extractRes.json();
-      if (extractData.error) throw new Error(extractData.error);
 
-      const extractedStocks = extractData.stocks;
       if (!extractedStocks?.length) throw new Error('No stocks found');
-
       setStocks(extractedStocks);
-
-      // Step 2: Scan stocks one at a time with 5s delay — avoids rate limits
-      setPhase('scanning');
-      const initStatuses = {};
-      extractedStocks.forEach((s) => { initStatuses[s.ticker] = 'loading'; });
-      setStatuses(initStatuses);
-
-      for (let i = 0; i < extractedStocks.length; i++) {
-        const stock = extractedStocks[i];
-        try {
-          const res = await fetch('/api/scan-stock', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ stock }),
-          });
-          const data = await res.json();
-          if (data.error) throw new Error(data.error);
-          setResults((r) => ({ ...r, [stock.ticker]: data }));
-          setStatuses((s) => ({ ...s, [stock.ticker]: 'done' }));
-        } catch {
-          setStatuses((s) => ({ ...s, [stock.ticker]: 'error' }));
-        } finally {
-          setCompleted((c) => c + 1);
-        }
-        // 5s gap between each stock to stay within rate limits
-        if (i < extractedStocks.length - 1) {
-          await new Promise((r) => setTimeout(r, 5000));
-        }
-      }
-
-      setPhase('done');
+      await runScan(extractedStocks);
     } catch (err) {
       setError(err.message);
       setPhase('idle');
     }
-  }, [mode, imageFile, tickerInput, market]);
+  }, [mode, imageFile, tickerInput, market, runScan]);
 
   const doneCount = Object.values(statuses).filter((s) => s === 'done').length;
   const totalCount = stocks.length;
@@ -236,48 +364,33 @@ export default function Home() {
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-5xl mx-auto px-4 py-10">
 
-        {/* Header */}
         <div className="mb-8">
-          <p className="font-mono text-[10px] text-gray-400 tracking-widest uppercase mb-1">
-            Allan · Personal Tool
-          </p>
-          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">
-            Polymarket Signal Scanner
-          </h1>
+          <p className="font-mono text-[10px] text-gray-400 tracking-widest uppercase mb-1">Allan · Personal Tool</p>
+          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">Polymarket Signal Scanner</h1>
           <p className="text-sm text-gray-500 mt-1">
             Upload a Danelfin screenshot or paste tickers — scans Polymarket live for each stock.
           </p>
         </div>
 
-        {/* Input Panel */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
-
-          {/* Mode + Market toggles */}
           <div className="flex flex-wrap items-center gap-4 mb-5">
             <div>
               <p className="font-mono text-[10px] text-gray-400 uppercase tracking-wider mb-1.5">Input</p>
               <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
                 {['text', 'image'].map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setMode(m)}
-                    className={`px-4 py-1.5 transition-colors ${mode === m ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-                  >
+                  <button key={m} onClick={() => setMode(m)}
+                    className={`px-4 py-1.5 transition-colors ${mode === m ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                     {m === 'text' ? 'Paste tickers' : 'Upload screenshot'}
                   </button>
                 ))}
               </div>
             </div>
-
             <div>
               <p className="font-mono text-[10px] text-gray-400 uppercase tracking-wider mb-1.5">Market</p>
               <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs font-medium">
                 {['auto', 'US', 'EU'].map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setMarket(m)}
-                    className={`px-4 py-1.5 transition-colors ${market === m ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}
-                  >
+                  <button key={m} onClick={() => setMarket(m)}
+                    className={`px-4 py-1.5 transition-colors ${market === m ? 'bg-gray-900 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'}`}>
                     {m === 'auto' ? 'Auto' : m}
                   </button>
                 ))}
@@ -285,26 +398,23 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Text input */}
           {mode === 'text' && (
             <div className="mb-4">
               <textarea
-                className="w-full border border-gray-200 rounded-lg p-3 text-sm font-mono text-gray-800 placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+                className="w-full border border-gray-200 rounded-lg p-3 text-sm font-mono text-gray-800 placeholder-gray-400 resize-none focus:outline-none focus:ring-2 focus:ring-gray-900"
                 rows={3}
                 placeholder="AG, HL, AAL, HOOD, BTG, U, CDE, ONDS, BAC, MSFT"
                 value={tickerInput}
                 onChange={(e) => setTickerInput(e.target.value)}
               />
-              <p className="text-[11px] text-gray-400 mt-1">Comma, space, or newline separated. Suffix optional for EU stocks (e.g. UCG.MI or just UCG).</p>
+              <p className="text-[11px] text-gray-400 mt-1">Comma, space, or newline separated.</p>
             </div>
           )}
 
-          {/* Image input */}
           {mode === 'image' && (
             <div
               className="mb-4 border-2 border-dashed border-gray-200 rounded-xl p-6 text-center cursor-pointer hover:border-gray-400 transition-colors"
-              onDrop={handleDrop}
-              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}
               onClick={() => fileRef.current?.click()}
             >
               <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
@@ -329,23 +439,27 @@ export default function Home() {
             </div>
           )}
 
+          {!API_KEY && (
+            <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <p className="text-xs text-amber-700 font-medium">⚠ NEXT_PUBLIC_ANTHROPIC_API_KEY not detected. Add it to Vercel environment variables and redeploy.</p>
+            </div>
+          )}
           <button
             onClick={handleScan}
             disabled={isScanning || (mode === 'text' && !tickerInput.trim()) || (mode === 'image' && !imageFile)}
             className="w-full py-2.5 px-4 rounded-lg text-sm font-semibold bg-gray-900 text-white hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {phase === 'extracting' ? 'Reading tickers...' :
-             phase === 'scanning'   ? `Scanning Polymarket... ${doneCount}/${totalCount}` :
+             phase === 'scanning' ? `Scanning Polymarket... ${doneCount}/${totalCount}` :
              '→ Scan Polymarket'}
           </button>
         </div>
 
-        {/* Progress bar */}
         {isScanning && (
           <div className="mb-6">
             <div className="flex justify-between mb-1">
               <span className="font-mono text-[10px] text-gray-400 uppercase tracking-wider">
-                {phase === 'extracting' ? 'Extracting tickers from screenshot...' : `Scanning ${totalCount} stocks simultaneously`}
+                {phase === 'extracting' ? 'Extracting tickers...' : `${doneCount}/${totalCount} complete — scanning one at a time`}
               </span>
               <span className="font-mono text-[10px] text-gray-400">{pct}%</span>
             </div>
@@ -355,36 +469,31 @@ export default function Home() {
           </div>
         )}
 
-        {/* Done header */}
         {phase === 'done' && stocks.length > 0 && (
           <div className="flex items-center justify-between mb-4">
             <p className="font-mono text-[10px] text-gray-400 uppercase tracking-wider">
               {doneCount}/{totalCount} complete · Click any card to expand
             </p>
-            <button
-              onClick={() => { setPhase('idle'); setStocks([]); setResults({}); setStatuses({}); setCompleted(0); }}
-              className="text-xs text-gray-500 hover:text-gray-900 underline underline-offset-2"
-            >
+            <button onClick={() => { setPhase('idle'); setStocks([]); setResults({}); setStatuses({}); setCompleted(0); }}
+              className="text-xs text-gray-500 hover:text-gray-900 underline underline-offset-2">
               Clear
             </button>
           </div>
         )}
 
-        {/* Results grid */}
         {stocks.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {stocks.map((stock) => (
-              <StockCard
-                key={stock.ticker}
-                stock={stock}
+              <StockCard key={stock.ticker} stock={stock}
                 result={results[stock.ticker]}
                 status={statuses[stock.ticker]}
+                errorMsg={errors[stock.ticker]}
+                onRetry={handleRetry}
               />
             ))}
           </div>
         )}
 
-        {/* Footer */}
         <p className="font-mono text-[9px] text-gray-300 text-center mt-10 uppercase tracking-widest">
           Live data via Polymarket · Powered by Claude
         </p>
