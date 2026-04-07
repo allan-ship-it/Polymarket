@@ -198,8 +198,9 @@ export default function Home() {
       setStatuses(initStatuses);
 
       await Promise.all(
-        extractedStocks.map(async (stock) => {
-          try {
+        extractedStocks.map(async (stock, index) => {
+          await new Promise(r => setTimeout(r, index * 1500)); // stagger by 1.5s each
+    try {
             const res = await fetch('/api/scan-stock', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
